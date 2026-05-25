@@ -1,12 +1,11 @@
-//
-// Created by David Okocha on 23/05/2026.
-//
-
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <netinet/in.h>
+#include <sys/select.h>
+
+#define MAX_CLIENTS 50
 
 void server(void)
 {
@@ -41,43 +40,98 @@ void server(void)
 
     socklen_t addrlen = sizeof(addr);
 
+    int clients[MAX_CLIENTS];
+    char usernames[MAX_CLIENTS][256];
+    int client_count = 0;
+
+    for (int i = 0; i < MAX_CLIENTS; i++) clients[i] = -1;
+
     while (1)
     {
-        const int client_id = accept(server_fd, (struct sockaddr*)&addr, &addrlen);
-        if (client_id == -1)
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(server_fd, &readfds);
+        int max_fd = server_fd;
+
+        for (int i = 0; i < MAX_CLIENTS; i++)
         {
-            perror("Could not accept client request");
-            exit(1);
+            if (clients[i] != -1)
+            {
+                FD_SET(clients[i], &readfds);
+                if (clients[i] > max_fd) max_fd = clients[i];
+            }
         }
 
-        char username[256];
+        select(max_fd + 1, &readfds, NULL, NULL, NULL);
 
-        read(client_id, username, sizeof(username));
-        username[strcspn(username, "\n")] = 0;
-
-        char message[8192];
-
-        while (1)
+        if (FD_ISSET(server_fd, &readfds))
         {
-            const ssize_t bytes_read = read(client_id, message, sizeof(message));
-
-            if (bytes_read == -1)
+            const int client_id = accept(server_fd, (struct sockaddr*)&addr, &addrlen);
+            if (client_id == -1)
             {
-                perror("Connection error");
-                exit(1);
+                perror("Could not accept client request");
+                continue;
             }
 
-            message[bytes_read] = '\0';
-
-            if (bytes_read == 0)
+            for (int i = 0; i < MAX_CLIENTS; i++)
             {
-                printf("Client disconnected");
-                break;
-            }
+                if (clients[i] == -1)
+                {
+                    clients[i] = client_id;
+                    read(client_id, usernames[i], sizeof(usernames[i]));
+                    usernames[i][strcspn(usernames[i], "\n")] = 0;
+                    client_count++;
 
-            char formatted[8192];
-            snprintf(formatted, sizeof(formatted), "[%s]: %s", username, message);
-            write(client_id, formatted, strlen(formatted));
+                    // join notification
+                    char notice[300];
+                    snprintf(notice, sizeof(notice), "*** %s has joined the chat ***\n", usernames[i]);
+                    for (int j = 0; j < MAX_CLIENTS; j++)
+                    {
+                        if (clients[j] != -1 && j != i)
+                            write(clients[j], notice, strlen(notice));
+                    }
+                    printf("%s", notice);
+                    break;
+                }
+            }
+        }
+
+        for (int i = 0; i < MAX_CLIENTS; i++)
+        {
+            if (clients[i] != -1 && FD_ISSET(clients[i], &readfds))
+            {
+                char buffer[8192];
+                const ssize_t bytes_read = read(clients[i], buffer, sizeof(buffer));
+
+                if (bytes_read <= 0)
+                {
+                    // leave notification
+                    char notice[300];
+                    snprintf(notice, sizeof(notice), "*** %s has left the chat ***\n", usernames[i]);
+                    for (int j = 0; j < MAX_CLIENTS; j++)
+                    {
+                        if (clients[j] != -1 && j != i)
+                            write(clients[j], notice, strlen(notice));
+                    }
+                    printf("%s", notice);
+
+                    close(clients[i]);
+                    clients[i] = -1;
+                    client_count--;
+                }
+                else
+                {
+                    buffer[bytes_read] = '\0';
+                    char formatted[8192];
+                    snprintf(formatted, sizeof(formatted), "[%s]: %s", usernames[i], buffer);
+                    for (int j = 0; j < MAX_CLIENTS; j++)
+                    {
+                        if (clients[j] != -1 && j != i)
+                            write(clients[j], formatted, strlen(formatted));
+                    }
+                    printf("%s", formatted);
+                }
+            }
         }
     }
 }
