@@ -101,7 +101,7 @@ void server(void)
             if (clients[i] != -1 && FD_ISSET(clients[i], &readfds))
             {
                 char buffer[8192];
-                const ssize_t bytes_read = read(clients[i], buffer, sizeof(buffer));
+                const ssize_t bytes_read = read(clients[i], buffer, sizeof(buffer) - 1);
 
                 if (bytes_read <= 0)
                 {
